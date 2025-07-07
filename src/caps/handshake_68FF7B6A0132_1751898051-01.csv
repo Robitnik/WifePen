@@ -1,0 +1,8 @@
+
+BSSID, First time seen, Last time seen, channel, Speed, Privacy, Cipher, Authentication, Power, # beacons, # IV, LAN IP, ID-length, ESSID, Key
+68:FF:7B:6A:01:32, 2025-07-07 17:20:51, 2025-07-07 17:21:52, 10, 270, WPA2, CCMP, PSK, -59,      318,      271,   0.  0.  0.  0,  12, TP-Link_0132, 
+
+Station MAC, First time seen, Last time seen, Power, # packets, BSSID, Probed ESSIDs
+BA:AE:4E:E5:50:E5, 2025-07-07 17:21:00, 2025-07-07 17:21:51, -77,       92, 68:FF:7B:6A:01:32,
+A2:61:D2:5D:22:70, 2025-07-07 17:21:01, 2025-07-07 17:21:52, -45,      383, 68:FF:7B:6A:01:32,TP-Link_0132
+
