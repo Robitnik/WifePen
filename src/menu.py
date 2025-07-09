@@ -45,7 +45,7 @@ def choose_device(devices: List[str]) -> int:
 
 def choose_device_actions(info) -> int:
     act = SelectionMenu.get_selection(
-        ["Start connect",],
+        ["Start connect (wait for handshake)", "Brute force password (rockyou.txt)"],
         title=f"{TITLE_COLOR}Network info{RESET}\n\n{info}"
     )
-    return act    
+    return act

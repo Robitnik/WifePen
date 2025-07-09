@@ -102,6 +102,7 @@ class CLI:
             if act == 0:
                 self._show_selected_info()
 
+
     def _show_selected_info(self) -> None:
         try:
             info = self.api.get_info_by_bssid(self.selected_network["bssid"])
@@ -113,6 +114,20 @@ class CLI:
         chose = menu.choose_device_actions(info)
         if chose == 0:
             self._connect()
+        elif chose == 1:
+            self._brute_force()
+
+    def _brute_force(self):
+        try:
+            print("Starting brute force with rockyou.txt...")
+            password = self.api.brute_force_password(self.selected_network["bssid"])
+            if password:
+                menu.show_message(f"Password found: {password}", "Success!")
+            else:
+                menu.show_message("Password not found in rockyou.txt", "Result")
+        except Exception as e:
+            menu.show_message(str(e), "Error")
+
     def print_clients(self, clients):
         text = "{:<20} {:<20} {:<10} {:<10}".format("MAC Address", "Connected to", "Power", "Packets")
         text = f"{text}\n{'-'*60}\n"

